@@ -17,6 +17,8 @@ type LogEntry = {
 };
 
 const MAX_LOG = 6;
+const SKILL_COST = 40;
+const STAMINA_REGEN = 8;
 
 const GamePreview = () => {
   const [player, setPlayer] = useState<Fighter>({
@@ -34,6 +36,7 @@ const GamePreview = () => {
     glow: "shadow-red-500/50",
   });
   const [turn, setTurn] = useState<"player" | "enemy">("player");
+  const [stamina, setStamina] = useState(100);
   const [log, setLog] = useState<LogEntry[]>([
     { id: 0, text: "The battle begins!", type: "system" },
   ]);
@@ -132,6 +135,11 @@ const GamePreview = () => {
       setTurn("enemy");
       enemyTurn(player.hp, newEHp);
     } else if (action === "skill") {
+      if (stamina < SKILL_COST) {
+        addLog("Not enough stamina for FROST BITE!", "system");
+        return;
+      }
+      setStamina((s) => Math.max(0, s - SKILL_COST));
       const damage = Math.floor(Math.random() * 20) + 18;
       const newEHp = Math.max(0, enemy.hp - damage);
 
@@ -158,11 +166,21 @@ const GamePreview = () => {
     setPlayer({ name: "BEARCLAW", hp: 100, maxHp: 100, color: "bg-emerald-500", glow: "shadow-emerald-500/50" });
     setEnemy({ name: "SKULLBEAK", hp: 100, maxHp: 100, color: "bg-red-500", glow: "shadow-red-500/50" });
     setTurn("player");
+    setStamina(100);
     setLog([{ id: 0, text: "The battle begins!", type: "system" }]);
     setLogId(1);
     setGameOver(null);
     setFloatingDamage([]);
   };
+
+  // Passive stamina regeneration
+  useEffect(() => {
+    if (gameOver) return;
+    const t = setInterval(() => {
+      setStamina((s) => Math.min(100, s + STAMINA_REGEN));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [gameOver]);
 
   // Auto enemy turn trigger
   useEffect(() => {
@@ -448,8 +466,27 @@ const GamePreview = () => {
             </div>
           </div>
 
+          {/* STAMINA */}
+          <div className="mt-6 max-w-xs mx-auto">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="flex items-center gap-1.5 text-[11px] sm:text-xs font-semibold tracking-wider uppercase text-sky-300">
+                <Activity className="w-3.5 h-3.5" />
+                Stamina
+              </span>
+              <span className="text-[11px] sm:text-xs font-mono text-sky-300">
+                {stamina}/100
+              </span>
+            </div>
+            <div className="h-2 w-full bg-zinc-800 rounded-full overflow-hidden border border-sky-500/20">
+              <div
+                className="h-full bg-gradient-to-r from-sky-500 to-cyan-400 transition-all duration-500"
+                style={{ width: `${stamina}%` }}
+              />
+            </div>
+          </div>
+
           {/* ACTIONS */}
-          <div className="flex flex-wrap justify-center gap-3 sm:gap-4 mt-6">
+          <div className="flex flex-wrap justify-center gap-3 sm:gap-4 mt-5">
             <button
               onClick={() => playerAction("attack")}
               disabled={turn !== "player" || gameOver !== null}
@@ -460,11 +497,13 @@ const GamePreview = () => {
             </button>
             <button
               onClick={() => playerAction("skill")}
-              disabled={turn !== "player" || gameOver !== null}
+              disabled={turn !== "player" || gameOver !== null || stamina < SKILL_COST}
+              title={stamina < SKILL_COST ? `Requires ${SKILL_COST} stamina` : "Frost Bite"}
               className="group px-5 sm:px-6 py-2.5 border-2 border-yellow-500 text-yellow-500 font-bold rounded-lg hover:bg-yellow-500 hover:text-black hover:scale-105 transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100 flex items-center gap-2"
             >
               <Zap className="w-4 h-4" />
               Skill
+              <span className="text-[10px] font-mono opacity-70">-{SKILL_COST}</span>
             </button>
             <button
               onClick={() => playerAction("defend")}
