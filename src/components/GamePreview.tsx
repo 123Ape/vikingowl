@@ -199,7 +199,7 @@ const GamePreview = () => {
   return (
     <section
       id="game"
-      className="relative py-24 sm:py-32 bg-zinc-950 text-center overflow-hidden"
+      className="relative py-24 sm:py-32 bg-gradient-to-b from-black to-zinc-950 text-center overflow-hidden"
     >
       {/* Ambient glow */}
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[400px] bg-yellow-500/5 rounded-full blur-[120px] pointer-events-none" />
@@ -243,7 +243,7 @@ const GamePreview = () => {
         {/* Battle frame */}
         <div
           ref={frame.ref}
-          className={`reveal ${frame.visible ? "is-visible" : ""} relative mx-auto max-w-5xl border border-yellow-500/40 rounded-2xl p-4 sm:p-6 bg-black/80 backdrop-blur-sm shadow-2xl shadow-yellow-500/10`}
+          className={`reveal ${frame.visible ? "is-visible" : ""} relative mx-auto max-w-5xl border border-yellow-500 rounded-2xl p-4 sm:p-6 bg-black/80 backdrop-blur-sm shadow-[0_0_30px_rgba(212,175,55,0.3)]`}
         >
           {/* Decorative corner brackets */}
           <span className="pointer-events-none absolute -top-px -left-px w-6 h-6 border-t-2 border-l-2 border-yellow-500/70 rounded-tl-2xl" />
