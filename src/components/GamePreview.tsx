@@ -350,10 +350,12 @@ const GamePreview = () => {
               } ${attacking === "player" ? "-translate-x-2 scale-110" : ""}`}
             >
               <div className="relative">
-                <div className="absolute inset-0 bg-emerald-500/30 rounded-full blur-xl" />
-                <div className="relative w-16 h-16 sm:w-20 sm:h-20 rounded-full border-2 border-emerald-500 bg-gradient-to-br from-emerald-700 to-emerald-900 flex items-center justify-center shadow-lg shadow-emerald-500/30">
-                  <Swords className="w-7 h-7 sm:w-8 sm:h-8 text-emerald-300" />
-                </div>
+                <div className="absolute inset-0 bg-emerald-500/30 rounded-full blur-2xl" />
+                <img
+                  src="/owl-player.png"
+                  alt="Bearclaw, the player's Viking owl warrior"
+                  className="relative w-24 h-24 sm:w-32 sm:h-32 object-contain drop-shadow-[0_0_12px_rgba(16,185,129,0.4)]"
+                />
                 {/* Floating damage */}
                 {floatingDamage
                   .filter((d) => d.target === "player")
@@ -380,10 +382,12 @@ const GamePreview = () => {
               } ${attacking === "enemy" ? "translate-x-2 scale-110" : ""}`}
             >
               <div className="relative inline-block">
-                <div className="absolute inset-0 bg-red-500/30 rounded-full blur-xl" />
-                <div className="relative w-16 h-16 sm:w-20 sm:h-20 rounded-full border-2 border-red-500 bg-gradient-to-br from-red-700 to-red-900 flex items-center justify-center shadow-lg shadow-red-500/30">
-                  <Zap className="w-7 h-7 sm:w-8 sm:h-8 text-red-300" />
-                </div>
+                <div className="absolute inset-0 bg-red-500/30 rounded-full blur-2xl" />
+                <img
+                  src="/owl-enemy.png"
+                  alt="Skullbeak, the enemy Viking owl warrior"
+                  className="relative w-24 h-24 sm:w-32 sm:h-32 object-contain drop-shadow-[0_0_12px_rgba(239,68,68,0.4)]"
+                />
                 {floatingDamage
                   .filter((d) => d.target === "enemy")
                   .map((d) => (
