@@ -1,414 +1,746 @@
-import { useState, useEffect, useCallback } from "react";
-import { Swords, Shield, Zap, Heart, Activity } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Swords, ArrowUp, Gamepad2 } from "lucide-react";
+import { useReveal } from "@/hooks/useReveal";
 
-type Fighter = {
-  name: string;
+/* ------------------------------------------------------------------ */
+/*  Real-time 2D arena prototype (Shadow Fight Arena inspired)         */
+/*  - rAF game loop with physics in refs (no per-frame React renders)  */
+/*  - Player: joystick / keyboard movement, jump, attack               */
+/*  - Enemy: simple AI state machine                                   */
+/* ------------------------------------------------------------------ */
+
+const TUNING = {
+  playerSpeed: 4.4, // px per frame @60fps
+  enemySpeed: 3.3,
+  gravity: 0.95,
+  jump: 17,
+  attackRange: 132, // center-to-center px
+  attackCooldown: 520, // ms
+  attackWindup: 90, // ms before damage lands
+  attackActive: 220, // ms attack pose duration
+  minGap: 64, // keep bodies from fully overlapping
+  playerMaxHp: 100,
+  enemyMaxHp: 100,
+};
+
+type Status = "ready" | "fighting" | "win" | "lose";
+
+type Entity = {
+  x: number; // left edge px
+  y: number; // height above ground px
+  vy: number;
+  facing: 1 | -1; // 1 = facing right
   hp: number;
   maxHp: number;
-  color: string;
-  glow: string;
+  lastAttack: number;
+  attackStart: number; // 0 when not attacking
+  hitApplied: boolean;
 };
 
-type LogEntry = {
-  id: number;
-  text: string;
-  type: "player" | "enemy" | "system";
+type AI = {
+  dir: number; // -1,0,1 horizontal intent
+  nextDecision: number;
+  wantJump: boolean;
 };
-
-const MAX_LOG = 6;
 
 const GamePreview = () => {
-  const [player, setPlayer] = useState<Fighter>({
-    name: "BEARCLAW",
-    hp: 100,
-    maxHp: 100,
-    color: "bg-emerald-500",
-    glow: "shadow-emerald-500/50",
+  const [status, setStatus] = useState<Status>("ready");
+  const header = useReveal<HTMLDivElement>();
+  const frame = useReveal<HTMLDivElement>();
+
+  // DOM refs (written to directly by the loop)
+  const arenaRef = useRef<HTMLDivElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const playerRef = useRef<HTMLDivElement | null>(null);
+  const enemyRef = useRef<HTMLDivElement | null>(null);
+  const playerHpRef = useRef<HTMLDivElement | null>(null);
+  const enemyHpRef = useRef<HTMLDivElement | null>(null);
+  const fxLayerRef = useRef<HTMLDivElement | null>(null);
+
+  // Mutable world state
+  const world = useRef({
+    arenaW: 800,
+    spriteW: 112,
+    player: {
+      x: 160,
+      y: 0,
+      vy: 0,
+      facing: 1,
+      hp: TUNING.playerMaxHp,
+      maxHp: TUNING.playerMaxHp,
+      lastAttack: 0,
+      attackStart: 0,
+      hitApplied: true,
+    } as Entity,
+    enemy: {
+      x: 520,
+      y: 0,
+      vy: 0,
+      facing: -1,
+      hp: TUNING.enemyMaxHp,
+      maxHp: TUNING.enemyMaxHp,
+      lastAttack: 0,
+      attackStart: 0,
+      hitApplied: true,
+    } as Entity,
+    ai: { dir: 0, nextDecision: 0, wantJump: false } as AI,
+    input: { dir: 0, jump: false, attack: false },
+    running: false,
+    last: 0,
   });
-  const [enemy, setEnemy] = useState<Fighter>({
-    name: "SKULLBEAK",
-    hp: 100,
-    maxHp: 100,
-    color: "bg-red-500",
-    glow: "shadow-red-500/50",
-  });
-  const [turn, setTurn] = useState<"player" | "enemy">("player");
-  const [log, setLog] = useState<LogEntry[]>([
-    { id: 0, text: "The battle begins!", type: "system" },
-  ]);
-  const [floatingDamage, setFloatingDamage] = useState<
-    { id: number; target: "player" | "enemy"; amount: number; crit: boolean }[]
-  >([]);
-  const [shake, setShake] = useState<"player" | "enemy" | null>(null);
-  const [attacking, setAttacking] = useState<"player" | "enemy" | null>(null);
-  const [gameOver, setGameOver] = useState<"player" | "enemy" | null>(null);
-  const [logId, setLogId] = useState(1);
 
-  const addLog = useCallback((text: string, type: LogEntry["type"]) => {
-    setLogId((prev) => {
-      const id = prev;
-      setLog((curr) => [{ id, text, type }, ...curr].slice(0, MAX_LOG));
-      return prev + 1;
-    });
-  }, []);
+  const rafRef = useRef<number | null>(null);
+  const statusRef = useRef<Status>("ready");
+  statusRef.current = status;
 
-  const showDamage = (target: "player" | "enemy", amount: number, crit: boolean) => {
-    const id = Date.now() + Math.random();
-    setFloatingDamage((curr) => [...curr, { id, target, amount, crit }]);
-    setTimeout(() => {
-      setFloatingDamage((curr) => curr.filter((d) => d.id !== id));
-    }, 1200);
-  };
+  /* ----------------------------- helpers ---------------------------- */
 
-  const triggerShake = (target: "player" | "enemy") => {
-    setShake(target);
-    setTimeout(() => setShake(null), 400);
-  };
+  const centerX = useCallback((e: Entity) => e.x + world.current.spriteW / 2, []);
 
-  const triggerAttack = (target: "player" | "enemy") => {
-    setAttacking(target);
-    setTimeout(() => setAttacking(null), 300);
-  };
-
-  const checkGameOver = (pHp: number, eHp: number) => {
-    if (eHp <= 0) {
-      setGameOver("player");
-      addLog("SKULLBEAK has fallen! Victory!", "system");
-      return true;
-    }
-    if (pHp <= 0) {
-      setGameOver("enemy");
-      addLog("BEARCLAW has fallen! Defeat...", "system");
-      return true;
-    }
-    return false;
-  };
-
-  const enemyTurn = useCallback(
-    (pHp: number, eHp: number) => {
-      if (pHp <= 0 || eHp <= 0) return;
-      setTimeout(() => {
-        const isCrit = Math.random() < 0.2;
-        const baseDamage = Math.floor(Math.random() * 12) + 8;
-        const damage = isCrit ? Math.floor(baseDamage * 1.6) : baseDamage;
-        const newPHp = Math.max(0, pHp - damage);
-
-        setPlayer((prev) => ({ ...prev, hp: newPHp }));
-        triggerAttack("enemy");
-        triggerShake("player");
-        showDamage("player", damage, isCrit);
-        addLog(
-          `SKULLBEAK ${isCrit ? "CRITICAL! " : ""}strikes for ${damage} damage`,
-          "enemy"
-        );
-
-        checkGameOver(newPHp, eHp);
-        setTurn("player");
-      }, 900);
+  const spawnFloatingDamage = useCallback(
+    (x: number, y: number, amount: number, color: string) => {
+      const layer = fxLayerRef.current;
+      if (!layer) return;
+      const el = document.createElement("div");
+      el.textContent = `-${amount}`;
+      el.className =
+        "pointer-events-none absolute font-bold text-lg sm:text-xl drop-shadow-lg select-none";
+      el.style.left = `${x}px`;
+      el.style.bottom = `${y}px`;
+      el.style.color = color;
+      el.style.transform = "translate(-50%, 0)";
+      el.style.transition = "transform 700ms ease-out, opacity 700ms ease-out";
+      layer.appendChild(el);
+      requestAnimationFrame(() => {
+        el.style.transform = "translate(-50%, -60px)";
+        el.style.opacity = "0";
+      });
+      setTimeout(() => el.remove(), 720);
     },
-    [addLog]
+    []
   );
 
-  const playerAction = (action: "attack" | "skill" | "defend") => {
-    if (turn !== "player" || gameOver) return;
+  const flashHit = useCallback((ref: React.RefObject<HTMLDivElement | null>) => {
+    const node = ref.current;
+    if (!node) return;
+    node.classList.add("arena-hit");
+    setTimeout(() => node.classList.remove("arena-hit"), 200);
+  }, []);
 
-    if (action === "attack") {
-      const isCrit = Math.random() < 0.25;
-      const baseDamage = Math.floor(Math.random() * 14) + 10;
-      const damage = isCrit ? Math.floor(baseDamage * 1.7) : baseDamage;
-      const newEHp = Math.max(0, enemy.hp - damage);
+  const shakeStage = useCallback(() => {
+    const node = stageRef.current;
+    if (!node) return;
+    node.classList.remove("arena-shake");
+    void node.offsetWidth; // reflow to restart animation
+    node.classList.add("arena-shake");
+  }, []);
 
-      setEnemy((prev) => ({ ...prev, hp: newEHp }));
-      triggerAttack("player");
-      triggerShake("enemy");
-      showDamage("enemy", damage, isCrit);
-      addLog(
-        `BEARCLAW ${isCrit ? "CRITICAL! " : ""}strikes for ${damage} damage`,
-        "player"
-      );
+  const triggerAttackPose = useCallback(
+    (ref: React.RefObject<HTMLDivElement | null>) => {
+      const node = ref.current;
+      if (!node) return;
+      node.classList.remove("arena-attack");
+      void node.offsetWidth;
+      node.classList.add("arena-attack");
+      setTimeout(() => node.classList.remove("arena-attack"), TUNING.attackActive);
+    },
+    []
+  );
 
-      if (checkGameOver(player.hp, newEHp)) return;
-      setTurn("enemy");
-      enemyTurn(player.hp, newEHp);
-    } else if (action === "skill") {
-      const damage = Math.floor(Math.random() * 20) + 18;
-      const newEHp = Math.max(0, enemy.hp - damage);
+  /* ------------------------------ loop ------------------------------ */
 
-      setEnemy((prev) => ({ ...prev, hp: newEHp }));
-      triggerAttack("player");
-      triggerShake("enemy");
-      showDamage("enemy", damage, true);
-      addLog(`BEARCLAW unleashes FROST BITE for ${damage} damage!`, "player");
+  const measure = useCallback(() => {
+    const arena = arenaRef.current;
+    const sprite = playerRef.current;
+    if (arena) world.current.arenaW = arena.clientWidth;
+    if (sprite) world.current.spriteW = sprite.offsetWidth || 112;
+  }, []);
 
-      if (checkGameOver(player.hp, newEHp)) return;
-      setTurn("enemy");
-      enemyTurn(player.hp, newEHp);
-    } else if (action === "defend") {
-      const heal = Math.floor(Math.random() * 10) + 6;
-      const newPHp = Math.min(player.maxHp, player.hp + heal);
-      setPlayer((prev) => ({ ...prev, hp: newPHp }));
-      addLog(`BEARCLAW steadies and recovers ${heal} HP`, "player");
-      setTurn("enemy");
-      enemyTurn(newPHp, enemy.hp);
+  const resetWorld = useCallback(() => {
+    measure();
+    const w = world.current;
+    const aw = w.arenaW;
+    w.player.x = aw * 0.18;
+    w.player.y = 0;
+    w.player.vy = 0;
+    w.player.hp = TUNING.playerMaxHp;
+    w.player.facing = 1;
+    w.player.attackStart = 0;
+    w.player.hitApplied = true;
+    w.player.lastAttack = 0;
+
+    w.enemy.x = aw * 0.82 - w.spriteW;
+    w.enemy.y = 0;
+    w.enemy.vy = 0;
+    w.enemy.hp = TUNING.enemyMaxHp;
+    w.enemy.facing = -1;
+    w.enemy.attackStart = 0;
+    w.enemy.hitApplied = true;
+    w.enemy.lastAttack = 0;
+
+    w.ai.dir = 0;
+    w.ai.nextDecision = 0;
+    w.ai.wantJump = false;
+    w.input.dir = 0;
+    w.input.jump = false;
+    w.input.attack = false;
+  }, [measure]);
+
+  const render = useCallback(() => {
+    const w = world.current;
+    const { player, enemy, spriteW } = w;
+
+    if (playerRef.current) {
+      const flip = player.facing === 1 ? 1 : -1;
+      playerRef.current.style.transform = `translate3d(${player.x}px, ${-player.y}px, 0) scaleX(${flip})`;
     }
-  };
+    if (enemyRef.current) {
+      // enemy art faces left by default
+      const flip = enemy.facing === -1 ? 1 : -1;
+      enemyRef.current.style.transform = `translate3d(${enemy.x}px, ${-enemy.y}px, 0) scaleX(${flip})`;
+    }
+    if (playerHpRef.current) {
+      playerHpRef.current.style.width = `${(player.hp / player.maxHp) * 100}%`;
+    }
+    if (enemyHpRef.current) {
+      enemyHpRef.current.style.width = `${(enemy.hp / enemy.maxHp) * 100}%`;
+    }
+    void spriteW;
+  }, []);
 
-  const reset = () => {
-    setPlayer({ name: "BEARCLAW", hp: 100, maxHp: 100, color: "bg-emerald-500", glow: "shadow-emerald-500/50" });
-    setEnemy({ name: "SKULLBEAK", hp: 100, maxHp: 100, color: "bg-red-500", glow: "shadow-red-500/50" });
-    setTurn("player");
-    setLog([{ id: 0, text: "The battle begins!", type: "system" }]);
-    setLogId(1);
-    setGameOver(null);
-    setFloatingDamage([]);
-  };
+  const tryAttack = useCallback(
+    (attacker: Entity, defender: Entity, now: number) => {
+      if (now - attacker.lastAttack < TUNING.attackCooldown) return;
+      attacker.lastAttack = now;
+      attacker.attackStart = now;
+      attacker.hitApplied = false;
+    },
+    []
+  );
 
-  // Auto enemy turn trigger
-  useEffect(() => {
-    if (turn === "enemy" && !gameOver) {
-      const timer = setTimeout(() => {
-        const isCrit = Math.random() < 0.2;
-        const baseDamage = Math.floor(Math.random() * 12) + 8;
-        const damage = isCrit ? Math.floor(baseDamage * 1.6) : baseDamage;
-        const newPHp = Math.max(0, player.hp - damage);
+  const update = useCallback(
+    (dt: number, now: number) => {
+      const w = world.current;
+      const { player, enemy } = w;
+      const groundLimit = w.arenaW - w.spriteW;
 
-        setPlayer((prev) => ({ ...prev, hp: newPHp }));
-        triggerAttack("enemy");
-        triggerShake("player");
-        showDamage("player", damage, isCrit);
-        addLog(
-          `SKULLBEAK ${isCrit ? "CRITICAL! " : ""}strikes for ${damage} damage`,
-          "enemy"
-        );
+      /* ---- player input ---- */
+      player.x += w.input.dir * TUNING.playerSpeed * dt;
+      if (w.input.jump && player.y === 0) {
+        player.vy = TUNING.jump;
+      }
+      w.input.jump = false;
+      if (w.input.attack) {
+        tryAttack(player, enemy, now);
+        w.input.attack = false;
+      }
 
-        if (!checkGameOver(newPHp, enemy.hp)) {
-          setTurn("player");
+      /* ---- enemy AI ---- */
+      const dist = centerX(player) - centerX(enemy);
+      const absDist = Math.abs(dist);
+      if (now >= w.ai.nextDecision) {
+        w.ai.nextDecision = now + 280 + Math.random() * 520;
+        if (absDist > TUNING.attackRange * 0.92) {
+          w.ai.dir = dist > 0 ? 1 : -1; // chase
+          w.ai.wantJump = Math.random() < 0.18;
+        } else {
+          // in range: attack, sometimes reposition
+          const r = Math.random();
+          if (r < 0.6) {
+            w.ai.dir = 0;
+            tryAttack(enemy, player, now);
+          } else if (r < 0.8) {
+            w.ai.dir = dist > 0 ? -1 : 1; // back off
+            w.ai.wantJump = Math.random() < 0.3;
+          } else {
+            w.ai.dir = dist > 0 ? 1 : -1;
+          }
         }
-      }, 1000);
-      return () => clearTimeout(timer);
-    }
-  }, [turn, gameOver, player.hp, enemy.hp, addLog]);
+      }
+      enemy.x += w.ai.dir * TUNING.enemySpeed * dt;
+      if (w.ai.wantJump && enemy.y === 0) {
+        enemy.vy = TUNING.jump;
+        w.ai.wantJump = false;
+      }
 
-  const playerHpPct = (player.hp / player.maxHp) * 100;
-  const enemyHpPct = (enemy.hp / enemy.maxHp) * 100;
+      /* ---- gravity ---- */
+      for (const e of [player, enemy]) {
+        e.vy -= TUNING.gravity * dt;
+        e.y += e.vy * dt;
+        if (e.y <= 0) {
+          e.y = 0;
+          e.vy = 0;
+        }
+      }
+
+      /* ---- bounds + separation ---- */
+      player.x = Math.max(0, Math.min(groundLimit, player.x));
+      enemy.x = Math.max(0, Math.min(groundLimit, enemy.x));
+      const gap = centerX(enemy) - centerX(player);
+      if (Math.abs(gap) < TUNING.minGap) {
+        const push = (TUNING.minGap - Math.abs(gap)) / 2;
+        const s = gap >= 0 ? 1 : -1;
+        player.x -= s * push;
+        enemy.x += s * push;
+        player.x = Math.max(0, Math.min(groundLimit, player.x));
+        enemy.x = Math.max(0, Math.min(groundLimit, enemy.x));
+      }
+
+      /* ---- facing ---- */
+      player.facing = centerX(enemy) >= centerX(player) ? 1 : -1;
+      enemy.facing = centerX(player) <= centerX(enemy) ? -1 : 1;
+
+      /* ---- resolve attacks (damage lands mid-swing) ---- */
+      const resolve = (
+        atk: Entity,
+        def: Entity,
+        ref: React.RefObject<HTMLDivElement | null>,
+        defRef: React.RefObject<HTMLDivElement | null>,
+        dmgRange: [number, number],
+        color: string
+      ) => {
+        if (atk.attackStart === 0) return;
+        const elapsed = now - atk.attackStart;
+        if (elapsed >= TUNING.attackWindup && !atk.hitApplied) {
+          atk.hitApplied = true;
+          triggerAttackPose(ref);
+          const inRange = Math.abs(centerX(atk) - centerX(def)) <= TUNING.attackRange;
+          const facingDef =
+            (atk.facing === 1 && centerX(def) >= centerX(atk)) ||
+            (atk.facing === -1 && centerX(def) <= centerX(atk));
+          if (inRange && facingDef) {
+            const dmg =
+              Math.floor(Math.random() * (dmgRange[1] - dmgRange[0] + 1)) +
+              dmgRange[0];
+            def.hp = Math.max(0, def.hp - dmg);
+            flashHit(defRef);
+            shakeStage();
+            spawnFloatingDamage(centerX(def), def.y + 150, dmg, color);
+          }
+        }
+        if (elapsed >= TUNING.attackActive) atk.attackStart = 0;
+      };
+
+      resolve(player, enemy, playerRef, enemyRef, [9, 15], "#fca5a5");
+      resolve(enemy, player, enemyRef, playerRef, [6, 11], "#fcd34d");
+
+      /* ---- win / lose ---- */
+      if (enemy.hp <= 0) {
+        w.running = false;
+        setStatus("win");
+      } else if (player.hp <= 0) {
+        w.running = false;
+        setStatus("lose");
+      }
+    },
+    [centerX, flashHit, shakeStage, spawnFloatingDamage, triggerAttackPose, tryAttack]
+  );
+
+  const loop = useCallback(
+    (t: number) => {
+      const w = world.current;
+      if (!w.running) return;
+      if (!w.last) w.last = t;
+      const dt = Math.min((t - w.last) / 16.6667, 2.2);
+      w.last = t;
+      update(dt, t);
+      render();
+      rafRef.current = requestAnimationFrame(loop);
+    },
+    [render, update]
+  );
+
+  const startFight = useCallback(() => {
+    resetWorld();
+    render();
+    setStatus("fighting");
+  }, [render, resetWorld]);
+
+  // Run loop while fighting
+  useEffect(() => {
+    if (status !== "fighting") return;
+    const w = world.current;
+    w.running = true;
+    w.last = 0;
+    rafRef.current = requestAnimationFrame(loop);
+    return () => {
+      w.running = false;
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, [status, loop]);
+
+  // Keyboard controls
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      const w = world.current;
+      switch (e.key) {
+        case "ArrowLeft":
+        case "a":
+        case "A":
+          w.input.dir = -1;
+          break;
+        case "ArrowRight":
+        case "d":
+        case "D":
+          w.input.dir = 1;
+          break;
+        case "ArrowUp":
+        case "w":
+        case "W":
+        case " ":
+          w.input.jump = true;
+          break;
+        case "j":
+        case "J":
+        case "f":
+        case "F":
+          w.input.attack = true;
+          break;
+      }
+    };
+    const up = (e: KeyboardEvent) => {
+      const w = world.current;
+      if (["ArrowLeft", "a", "A", "ArrowRight", "d", "D"].includes(e.key)) {
+        w.input.dir = 0;
+      }
+    };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+    };
+  }, []);
+
+  // Keep measurements fresh
+  useEffect(() => {
+    measure();
+    const ro = new ResizeObserver(() => measure());
+    if (arenaRef.current) ro.observe(arenaRef.current);
+    return () => ro.disconnect();
+  }, [measure]);
+
+  /* --------------------------- control API --------------------------- */
+  const setDir = useCallback((dir: number) => {
+    world.current.input.dir = dir;
+  }, []);
+  const doJump = useCallback(() => {
+    world.current.input.jump = true;
+  }, []);
+  const doAttack = useCallback(() => {
+    world.current.input.attack = true;
+  }, []);
+
+  /* ------------------------------ view ------------------------------ */
 
   return (
-    <section id="game" className="py-24 sm:py-32 bg-zinc-950 text-center overflow-hidden">
-      <div className="max-w-5xl mx-auto px-6">
+    <section
+      id="game"
+      className="relative py-24 sm:py-32 bg-gradient-to-b from-black to-zinc-950 text-center overflow-hidden"
+    >
+      {/* Ambient glow */}
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[400px] bg-yellow-500/5 rounded-full blur-[120px] pointer-events-none" />
+
+      <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6">
         {/* Header */}
-        <div className="mb-12">
-          <span className="text-yellow-500 text-sm tracking-widest uppercase font-semibold">
-            Live Combat
+        <div
+          ref={header.ref}
+          className={`reveal ${header.visible ? "is-visible" : ""} mb-8 sm:mb-10`}
+        >
+          <span className="inline-flex items-center gap-2 text-yellow-500 text-xs sm:text-sm tracking-widest uppercase font-semibold">
+            <Gamepad2 className="w-4 h-4" />
+            Real-Time Prototype
           </span>
-          <h2 className="text-3xl sm:text-4xl font-bold mt-3 tracking-widest">
-            ARENA BATTLE PREVIEW
+          <h2 className="text-3xl sm:text-4xl font-bold mt-3 tracking-widest bg-gradient-to-b from-white via-yellow-100 to-yellow-600 bg-clip-text text-transparent">
+            ARENA COMBAT PREVIEW
           </h2>
+          <p className="text-gray-400 mt-3 text-sm sm:text-base max-w-md mx-auto text-pretty">
+            Move, leap, and strike in real time. Outmaneuver the AI rival in the
+            frozen colosseum.
+          </p>
           <div className="w-20 h-1 bg-yellow-500 mx-auto mt-6 rounded-full" />
         </div>
 
         {/* Battle frame */}
-        <div className="relative mx-auto max-w-5xl border border-yellow-500/40 rounded-2xl p-4 sm:p-6 bg-black/80 backdrop-blur-sm shadow-2xl shadow-yellow-500/10">
-          {/* HP BARS */}
-          <div className="flex justify-between items-start mb-6 gap-4">
-            {/* Player */}
-            <div className="flex-1 text-left">
-              <div className="flex items-center gap-2 mb-2">
-                <Heart className="w-4 h-4 text-emerald-500" />
-                <p className="font-bold tracking-wide text-sm sm:text-base">
-                  {player.name}
-                </p>
-                <span className="text-xs text-gray-500 ml-auto">
-                  {player.hp}/{player.maxHp}
-                </span>
-              </div>
-              <div className="w-full h-3 bg-zinc-800 rounded-full overflow-hidden">
+        <div
+          ref={frame.ref}
+          className={`reveal ${frame.visible ? "is-visible" : ""} relative mx-auto max-w-5xl border border-yellow-500 rounded-2xl p-3 sm:p-5 bg-black/80 backdrop-blur-sm shadow-[0_0_30px_rgba(212,175,55,0.3)]`}
+        >
+          {/* Corner brackets */}
+          <span className="pointer-events-none absolute -top-px -left-px w-6 h-6 border-t-2 border-l-2 border-yellow-500/70 rounded-tl-2xl" />
+          <span className="pointer-events-none absolute -top-px -right-px w-6 h-6 border-t-2 border-r-2 border-yellow-500/70 rounded-tr-2xl" />
+          <span className="pointer-events-none absolute -bottom-px -left-px w-6 h-6 border-b-2 border-l-2 border-yellow-500/70 rounded-bl-2xl" />
+          <span className="pointer-events-none absolute -bottom-px -right-px w-6 h-6 border-b-2 border-r-2 border-yellow-500/70 rounded-br-2xl" />
+
+          {/* HP HUD */}
+          <div className="flex items-center justify-between gap-3 sm:gap-6 mb-3 px-1">
+            <div className="flex-1 min-w-0 text-left">
+              <p className="text-xs sm:text-sm font-bold tracking-wider text-emerald-400 truncate">
+                BEARCLAW
+              </p>
+              <div className="mt-1 h-2.5 sm:h-3 w-full bg-zinc-800 rounded-full overflow-hidden border border-emerald-500/30">
                 <div
-                  className="h-full bg-gradient-to-r from-emerald-600 to-emerald-400 rounded-full transition-all duration-500 ease-out"
-                  style={{ width: `${playerHpPct}%` }}
+                  ref={playerHpRef}
+                  className="h-full bg-gradient-to-r from-emerald-500 to-green-400 transition-[width] duration-150"
+                  style={{ width: "100%" }}
                 />
               </div>
             </div>
-
-            {/* VS */}
-            <div className="flex flex-col items-center px-2">
-              <div className="text-yellow-500 font-bold text-xl sm:text-2xl tracking-widest">
-                VS
-              </div>
-              <div className="flex items-center gap-1 mt-1">
-                <Activity
-                  className={`w-3 h-3 ${
-                    turn === "player" ? "text-emerald-500" : "text-zinc-600"
-                  } animate-pulse`}
-                />
-                <span
-                  className={`text-[10px] tracking-widest uppercase ${
-                    turn === "player" ? "text-emerald-500" : "text-zinc-600"
-                  }`}
-                >
-                  {turn === "player" ? "Your Turn" : "Enemy"}
-                </span>
-                <Activity
-                  className={`w-3 h-3 ${
-                    turn === "enemy" ? "text-red-500" : "text-zinc-600"
-                  } animate-pulse`}
-                />
-              </div>
+            <div className="text-yellow-400 font-extrabold text-base sm:text-xl shrink-0">
+              VS
             </div>
-
-            {/* Enemy */}
-            <div className="flex-1 text-right">
-              <div className="flex items-center gap-2 mb-2 justify-end">
-                <span className="text-xs text-gray-500 mr-auto">{enemy.hp}/{enemy.maxHp}</span>
-                <p className="font-bold tracking-wide text-sm sm:text-base">
-                  {enemy.name}
-                </p>
-                <Heart className="w-4 h-4 text-red-500" />
-              </div>
-              <div className="w-full h-3 bg-zinc-800 rounded-full overflow-hidden">
+            <div className="flex-1 min-w-0 text-right">
+              <p className="text-xs sm:text-sm font-bold tracking-wider text-red-400 truncate">
+                SKULLBEAK
+              </p>
+              <div className="mt-1 h-2.5 sm:h-3 w-full bg-zinc-800 rounded-full overflow-hidden border border-red-500/30">
                 <div
-                  className="h-full bg-gradient-to-r from-red-400 to-red-600 rounded-full transition-all duration-500 ease-out ml-auto"
-                  style={{ width: `${enemyHpPct}%` }}
+                  ref={enemyHpRef}
+                  className="h-full bg-gradient-to-l from-red-500 to-rose-400 transition-[width] duration-150 ml-auto"
+                  style={{ width: "100%" }}
                 />
               </div>
             </div>
           </div>
 
-          {/* ARENA */}
-          <div className="relative h-80 sm:h-96 bg-[url('/arena.jpg')] bg-cover bg-center rounded-xl border border-zinc-700 overflow-hidden">
-            <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/30" />
+          {/* ARENA STAGE */}
+          <div
+            ref={stageRef}
+            className="relative h-[360px] sm:h-[460px] rounded-xl border border-zinc-700 overflow-hidden select-none"
+          >
+            {/* Parallax background */}
+            <img
+              src="/arena.jpg"
+              alt=""
+              aria-hidden="true"
+              className="absolute inset-0 w-full h-full object-cover animate-slow-zoom"
+            />
+            <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-black/50" />
+            <div className="absolute inset-0 shadow-[inset_0_0_120px_30px_rgba(0,0,0,0.7)] pointer-events-none" />
 
-            {/* Player fighter */}
-            <div
-              className={`absolute left-6 sm:left-12 bottom-8 text-left transition-all duration-300 ${
-                shake === "player" ? "animate-shake" : ""
-              } ${attacking === "player" ? "-translate-x-2 scale-110" : ""}`}
-            >
-              <div className="relative">
-                <div className="absolute inset-0 bg-emerald-500/30 rounded-full blur-xl" />
-                <div className="relative w-16 h-16 sm:w-20 sm:h-20 rounded-full border-2 border-emerald-500 bg-gradient-to-br from-emerald-700 to-emerald-900 flex items-center justify-center shadow-lg shadow-emerald-500/30">
-                  <Swords className="w-7 h-7 sm:w-8 sm:h-8 text-emerald-300" />
-                </div>
-                {/* Floating damage */}
-                {floatingDamage
-                  .filter((d) => d.target === "player")
-                  .map((d) => (
-                    <span
-                      key={d.id}
-                      className={`absolute -top-4 left-1/2 -translate-x-1/2 font-bold text-lg sm:text-xl animate-float-up ${
-                        d.crit ? "text-yellow-400 text-2xl" : "text-red-400"
-                      }`}
-                    >
-                      -{d.amount}
-                    </span>
-                  ))}
-              </div>
-              <p className="text-xs sm:text-sm mt-2 font-semibold tracking-wide">
-                Bearclaw
-              </p>
+            {/* Snow */}
+            <div className="absolute inset-0 pointer-events-none overflow-hidden">
+              {[...Array(10)].map((_, i) => (
+                <div
+                  key={i}
+                  className="absolute w-1 h-1 bg-white/50 rounded-full animate-snowfall"
+                  style={{
+                    left: `${(i * 11 + 5) % 100}%`,
+                    animationDelay: `${i * 0.7}s`,
+                    animationDuration: `${6 + (i % 3) * 2}s`,
+                  }}
+                />
+              ))}
             </div>
 
-            {/* Enemy fighter */}
-            <div
-              className={`absolute right-6 sm:right-12 bottom-8 text-right transition-all duration-300 ${
-                shake === "enemy" ? "animate-shake" : ""
-              } ${attacking === "enemy" ? "translate-x-2 scale-110" : ""}`}
-            >
-              <div className="relative inline-block">
-                <div className="absolute inset-0 bg-red-500/30 rounded-full blur-xl" />
-                <div className="relative w-16 h-16 sm:w-20 sm:h-20 rounded-full border-2 border-red-500 bg-gradient-to-br from-red-700 to-red-900 flex items-center justify-center shadow-lg shadow-red-500/30">
-                  <Zap className="w-7 h-7 sm:w-8 sm:h-8 text-red-300" />
-                </div>
-                {floatingDamage
-                  .filter((d) => d.target === "enemy")
-                  .map((d) => (
-                    <span
-                      key={d.id}
-                      className={`absolute -top-4 left-1/2 -translate-x-1/2 font-bold text-lg sm:text-xl animate-float-up ${
-                        d.crit ? "text-yellow-400 text-2xl" : "text-emerald-400"
-                      }`}
-                    >
-                      -{d.amount}
-                    </span>
-                  ))}
-              </div>
-              <p className="text-xs sm:text-sm mt-2 font-semibold tracking-wide">
-                Skullbeak
-              </p>
-            </div>
+            {/* Ground strip */}
+            <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-black/80 to-transparent" />
+            <div className="absolute bottom-14 left-0 right-0 h-px bg-yellow-500/20" />
 
-            {/* Game over overlay */}
-            {gameOver && (
-              <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center z-20">
-                <h3 className="text-3xl sm:text-4xl font-bold mb-2 tracking-widest">
-                  {gameOver === "player" ? "VICTORY" : "DEFEAT"}
-                </h3>
-                <p className="text-gray-400 mb-6">
-                  {gameOver === "player"
-                    ? "Skullbeak has fallen in the frozen arena"
-                    : "Bearclaw has fallen... the cold takes another"}
-                </p>
-                <button
-                  onClick={reset}
-                  className="px-6 py-2.5 bg-yellow-500 text-black font-bold rounded-lg hover:bg-yellow-400 hover:scale-105 transition-all duration-300"
+            {/* Fighters layer */}
+            <div className="absolute inset-0 pb-14">
+              <div className="absolute bottom-0 left-0 w-full h-full">
+                {/* Player */}
+                <div
+                  ref={playerRef}
+                  className="arena-fighter absolute bottom-0 left-0 w-24 sm:w-32 will-change-transform"
+                  style={{ transform: "translate3d(160px,0,0)" }}
                 >
-                  Battle Again
+                  <div className="relative">
+                    <img
+                      src="/owl-player.png"
+                      alt="Bearclaw, the player's Viking owl"
+                      className="w-24 sm:w-32 h-auto object-contain drop-shadow-[0_0_12px_rgba(16,185,129,0.45)]"
+                      draggable={false}
+                    />
+                    <span className="arena-slash pointer-events-none absolute top-1/3 right-0 translate-x-1/2 text-emerald-300/90 text-3xl font-black">
+                      ⟫
+                    </span>
+                    {/* ground shadow */}
+                    <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-16 h-3 bg-black/50 blur-md rounded-[50%]" />
+                  </div>
+                </div>
+
+                {/* Enemy */}
+                <div
+                  ref={enemyRef}
+                  className="arena-fighter absolute bottom-0 left-0 w-24 sm:w-32 will-change-transform"
+                  style={{ transform: "translate3d(520px,0,0)" }}
+                >
+                  <div className="relative">
+                    <img
+                      src="/owl-enemy.png"
+                      alt="Skullbeak, the enemy Viking owl"
+                      className="w-24 sm:w-32 h-auto object-contain drop-shadow-[0_0_12px_rgba(239,68,68,0.45)]"
+                      draggable={false}
+                    />
+                    <span className="arena-slash pointer-events-none absolute top-1/3 right-0 translate-x-1/2 text-red-300/90 text-3xl font-black">
+                      ⟫
+                    </span>
+                    <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-16 h-3 bg-black/50 blur-md rounded-[50%]" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* FX layer (floating damage) */}
+            <div
+              ref={fxLayerRef}
+              className="absolute inset-0 pb-14 pointer-events-none"
+            />
+
+            {/* Overlays */}
+            {status !== "fighting" && (
+              <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/70 backdrop-blur-sm text-center px-6">
+                {status === "ready" && (
+                  <>
+                    <h3 className="text-2xl sm:text-3xl font-bold tracking-widest text-white">
+                      ENTER THE ARENA
+                    </h3>
+                    <p className="text-gray-400 text-sm mt-2 max-w-sm">
+                      Defeat Skullbeak in real-time combat.
+                    </p>
+                  </>
+                )}
+                {status === "win" && (
+                  <h3 className="text-2xl sm:text-4xl font-extrabold tracking-widest text-emerald-400 drop-shadow">
+                    VICTORY
+                  </h3>
+                )}
+                {status === "lose" && (
+                  <h3 className="text-2xl sm:text-4xl font-extrabold tracking-widest text-red-400 drop-shadow">
+                    DEFEATED
+                  </h3>
+                )}
+                <button
+                  onClick={startFight}
+                  className="mt-6 px-8 py-3 bg-yellow-500 text-black font-bold rounded-lg hover:scale-105 transition-transform duration-200 shadow-[0_0_30px_rgba(212,175,55,0.4)]"
+                >
+                  {status === "ready" ? "FIGHT" : "REMATCH"}
                 </button>
               </div>
             )}
           </div>
 
-          {/* BATTLE LOG */}
-          <div className="mt-4 h-24 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-left">
-            <div className="space-y-1">
-              {log.map((entry) => (
-                <p
-                  key={entry.id}
-                  className={`text-xs sm:text-sm font-mono ${
-                    entry.type === "player"
-                      ? "text-emerald-400"
-                      : entry.type === "enemy"
-                      ? "text-red-400"
-                      : "text-yellow-500"
-                  }`}
-                >
-                  {entry.type === "system" ? "★ " : "> "}
-                  {entry.text}
-                </p>
-              ))}
-            </div>
-          </div>
+          {/* ON-SCREEN CONTROLS */}
+          <div className="mt-4 flex items-center justify-between gap-4">
+            {/* Joystick (left) */}
+            <Joystick onChange={setDir} disabled={status !== "fighting"} />
 
-          {/* ACTIONS */}
-          <div className="flex justify-center gap-3 sm:gap-4 mt-6">
-            <button
-              onClick={() => playerAction("attack")}
-              disabled={turn !== "player" || gameOver !== null}
-              className="group px-5 sm:px-6 py-2.5 bg-yellow-500 text-black font-bold rounded-lg hover:bg-yellow-400 hover:scale-105 transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100 flex items-center gap-2"
-            >
-              <Swords className="w-4 h-4" />
-              Attack
-            </button>
-            <button
-              onClick={() => playerAction("skill")}
-              disabled={turn !== "player" || gameOver !== null}
-              className="group px-5 sm:px-6 py-2.5 border-2 border-yellow-500 text-yellow-500 font-bold rounded-lg hover:bg-yellow-500 hover:text-black hover:scale-105 transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100 flex items-center gap-2"
-            >
-              <Zap className="w-4 h-4" />
-              Skill
-            </button>
-            <button
-              onClick={() => playerAction("defend")}
-              disabled={turn !== "player" || gameOver !== null}
-              className="group px-5 sm:px-6 py-2.5 border-2 border-zinc-600 text-zinc-300 font-bold rounded-lg hover:border-zinc-400 hover:text-white hover:scale-105 transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100 flex items-center gap-2"
-            >
-              <Shield className="w-4 h-4" />
-              Defend
-            </button>
+            {/* keyboard hint (desktop) */}
+            <p className="hidden md:block text-[11px] text-gray-500 leading-relaxed text-center">
+              <span className="text-gray-300 font-semibold">A / D</span> move
+              <span className="mx-2">·</span>
+              <span className="text-gray-300 font-semibold">W / Space</span> jump
+              <span className="mx-2">·</span>
+              <span className="text-gray-300 font-semibold">J</span> attack
+            </p>
+
+            {/* Action buttons (right) */}
+            <div className="flex items-end gap-3">
+              <button
+                onPointerDown={doJump}
+                disabled={status !== "fighting"}
+                aria-label="Jump"
+                className="w-14 h-14 rounded-full border-2 border-sky-400 text-sky-300 flex items-center justify-center bg-sky-500/10 active:scale-90 transition-transform disabled:opacity-40"
+              >
+                <ArrowUp className="w-6 h-6" />
+              </button>
+              <button
+                onPointerDown={doAttack}
+                disabled={status !== "fighting"}
+                aria-label="Attack"
+                className="w-20 h-20 rounded-full border-2 border-yellow-500 text-black font-bold flex flex-col items-center justify-center bg-yellow-500 active:scale-90 transition-transform disabled:opacity-40 shadow-[0_0_20px_rgba(212,175,55,0.35)]"
+              >
+                <Swords className="w-7 h-7" />
+                <span className="text-[10px] tracking-wider mt-0.5">HIT</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
     </section>
   );
 };
+
+/* ----------------------- Virtual Joystick ------------------------- */
+
+function Joystick({
+  onChange,
+  disabled,
+}: {
+  onChange: (dir: number) => void;
+  disabled: boolean;
+}) {
+  const baseRef = useRef<HTMLDivElement | null>(null);
+  const knobRef = useRef<HTMLDivElement | null>(null);
+  const activeId = useRef<number | null>(null);
+
+  const reset = useCallback(() => {
+    if (knobRef.current) knobRef.current.style.transform = "translate(0px, 0px)";
+    onChange(0);
+  }, [onChange]);
+
+  const handleMove = useCallback(
+    (clientX: number) => {
+      const base = baseRef.current;
+      if (!base) return;
+      const rect = base.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const max = rect.width / 2;
+      let dx = clientX - cx;
+      dx = Math.max(-max, Math.min(max, dx));
+      if (knobRef.current) {
+        knobRef.current.style.transform = `translate(${dx}px, 0px)`;
+      }
+      const norm = dx / max;
+      onChange(Math.abs(norm) < 0.18 ? 0 : norm > 0 ? 1 : -1);
+    },
+    [onChange]
+  );
+
+  return (
+    <div
+      ref={baseRef}
+      onPointerDown={(e) => {
+        if (disabled) return;
+        activeId.current = e.pointerId;
+        (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+        handleMove(e.clientX);
+      }}
+      onPointerMove={(e) => {
+        if (disabled || activeId.current !== e.pointerId) return;
+        handleMove(e.clientX);
+      }}
+      onPointerUp={(e) => {
+        if (activeId.current !== e.pointerId) return;
+        activeId.current = null;
+        reset();
+      }}
+      onPointerCancel={() => {
+        activeId.current = null;
+        reset();
+      }}
+      className={`relative w-24 h-24 sm:w-28 sm:h-28 rounded-full border-2 border-zinc-700 bg-zinc-900/70 touch-none shrink-0 ${
+        disabled ? "opacity-40" : ""
+      }`}
+      aria-label="Movement joystick"
+      role="slider"
+      aria-valuemin={-1}
+      aria-valuemax={1}
+      aria-valuenow={0}
+    >
+      <span className="absolute inset-0 flex items-center justify-between px-2 text-zinc-600 text-xs pointer-events-none">
+        <span>◄</span>
+        <span>►</span>
+      </span>
+      <div
+        ref={knobRef}
+        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-yellow-500/90 border-2 border-yellow-300 shadow-lg pointer-events-none"
+        style={{ transform: "translate(0px,0px)" }}
+      />
+    </div>
+  );
+}
 
 export default GamePreview;

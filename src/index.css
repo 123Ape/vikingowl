@@ -92,4 +92,103 @@
   .animate-float-up {
     animation: float-up 1.2s ease-out forwards;
   }
+
+  /* Scroll reveal */
+  .reveal {
+    opacity: 0;
+    transform: translateY(40px);
+    transition: opacity 0.8s cubic-bezier(0.22, 1, 0.36, 1),
+      transform 0.8s cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: opacity, transform;
+  }
+  .reveal.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* Slow ken-burns zoom for cinematic backgrounds */
+  @keyframes slow-zoom {
+    0% {
+      transform: scale(1);
+    }
+    100% {
+      transform: scale(1.12);
+    }
+  }
+  .animate-slow-zoom {
+    animation: slow-zoom 20s ease-in-out infinite alternate;
+  }
+
+  /* Drifting ember / spark glow */
+  @keyframes ember {
+    0% {
+      transform: translateY(0) translateX(0);
+      opacity: 0;
+    }
+    15% {
+      opacity: 1;
+    }
+    85% {
+      opacity: 0.8;
+    }
+    100% {
+      transform: translateY(-120px) translateX(15px);
+      opacity: 0;
+    }
+  }
+  .animate-ember {
+    animation: ember linear infinite;
+  }
+
+  /* Sheen sweep across cards */
+  @keyframes sheen {
+    0% {
+      transform: translateX(-150%) skewX(-20deg);
+    }
+    100% {
+      transform: translateX(250%) skewX(-20deg);
+    }
+  }
+  .animate-sheen {
+    animation: sheen 1.2s ease-in-out;
+  }
+
+  /* Gradient text shimmer */
+  @keyframes shimmer {
+    0%,
+    100% {
+      background-position: 0% 50%;
+    }
+    50% {
+      background-position: 100% 50%;
+    }
+  }
+  .animate-shimmer {
+    background-size: 200% 200%;
+    animation: shimmer 6s ease-in-out infinite;
+  }
+
+  /* Progress bar fill */
+  @keyframes grow-width {
+    from {
+      width: 0%;
+    }
+  }
+  .animate-grow-width {
+    animation: grow-width 1.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-slow-zoom,
+    .animate-ember,
+    .animate-shimmer,
+    .animate-snowfall {
+      animation: none;
+    }
+    .reveal {
+      opacity: 1;
+      transform: none;
+      transition: none;
+    }
+  }
 }

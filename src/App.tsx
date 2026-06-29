@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Menu, X, Shield, Swords, Snowflake } from "lucide-react";
 import GamePreview from "@/components/GamePreview";
+import Lore from "@/components/Lore";
 import Roadmap from "@/components/Roadmap";
 
 function App() {
@@ -15,8 +16,8 @@ function App() {
 
   const navLinks = [
     { label: "Game", href: "#game" },
+    { label: "Lore", href: "#lore" },
     { label: "Roadmap", href: "#roadmap" },
-    { label: "Features", href: "#features" },
   ];
 
   return (
@@ -89,7 +90,7 @@ function App() {
       </nav>
 
       {/* HERO */}
-      <section className="relative text-center py-32 sm:py-40 bg-gradient-to-b from-black via-zinc-950 to-black overflow-hidden">
+      <section className="relative text-center px-5 sm:px-6 py-28 sm:py-40 bg-gradient-to-b from-black via-zinc-950 to-black overflow-hidden">
         {/* Ambient glow */}
         <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[600px] bg-yellow-500/10 rounded-full blur-[120px] pointer-events-none" />
         <div className="absolute bottom-0 left-1/4 w-[300px] h-[300px] bg-blue-500/5 rounded-full blur-[100px] pointer-events-none" />
@@ -126,7 +127,7 @@ function App() {
             />
           </div>
 
-          <h1 className="text-5xl sm:text-7xl font-bold mt-8 tracking-widest bg-gradient-to-b from-white via-yellow-100 to-yellow-600 bg-clip-text text-transparent">
+          <h1 className="text-4xl sm:text-7xl font-bold mt-8 tracking-wider sm:tracking-widest text-balance bg-gradient-to-b from-white via-yellow-100 to-yellow-600 bg-clip-text text-transparent">
             VIKING OWL ARENA
           </h1>
           <p className="text-gray-400 mt-4 text-lg tracking-wide">
@@ -166,6 +167,9 @@ function App() {
 
       {/* GAME PREVIEW */}
       <GamePreview />
+
+      {/* LORE */}
+      <Lore />
 
       {/* ROADMAP */}
       <Roadmap />
