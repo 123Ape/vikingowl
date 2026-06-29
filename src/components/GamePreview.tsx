@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { Swords, Shield, Zap, Heart, Activity } from "lucide-react";
+import { useReveal } from "@/hooks/useReveal";
 
 type Fighter = {
   name: string;
@@ -192,26 +193,67 @@ const GamePreview = () => {
   const playerHpPct = (player.hp / player.maxHp) * 100;
   const enemyHpPct = (enemy.hp / enemy.maxHp) * 100;
 
+  const header = useReveal<HTMLDivElement>();
+  const frame = useReveal<HTMLDivElement>();
+
   return (
-    <section id="game" className="py-24 sm:py-32 bg-zinc-950 text-center overflow-hidden">
-      <div className="max-w-5xl mx-auto px-6">
+    <section
+      id="game"
+      className="relative py-24 sm:py-32 bg-zinc-950 text-center overflow-hidden"
+    >
+      {/* Ambient glow */}
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[400px] bg-yellow-500/5 rounded-full blur-[120px] pointer-events-none" />
+      <div className="absolute bottom-0 right-1/4 w-[300px] h-[300px] bg-emerald-500/5 rounded-full blur-[100px] pointer-events-none" />
+
+      {/* Ambient snow */}
+      <div className="absolute inset-0 pointer-events-none overflow-hidden">
+        {[...Array(12)].map((_, i) => (
+          <div
+            key={i}
+            className="absolute w-1 h-1 bg-white/30 rounded-full animate-snowfall"
+            style={{
+              left: `${(i * 8 + 4) % 100}%`,
+              animationDelay: `${i * 1.1}s`,
+              animationDuration: `${9 + (i % 4) * 2}s`,
+            }}
+          />
+        ))}
+      </div>
+
+      <div className="relative z-10 max-w-5xl mx-auto px-5 sm:px-6">
         {/* Header */}
-        <div className="mb-12">
-          <span className="text-yellow-500 text-sm tracking-widest uppercase font-semibold">
+        <div
+          ref={header.ref}
+          className={`reveal ${header.visible ? "is-visible" : ""} mb-10 sm:mb-12`}
+        >
+          <span className="inline-flex items-center gap-2 text-yellow-500 text-xs sm:text-sm tracking-widest uppercase font-semibold">
+            <span className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
             Live Combat
           </span>
-          <h2 className="text-3xl sm:text-4xl font-bold mt-3 tracking-widest">
+          <h2 className="text-3xl sm:text-4xl font-bold mt-3 tracking-widest bg-gradient-to-b from-white via-yellow-100 to-yellow-600 bg-clip-text text-transparent">
             ARENA BATTLE PREVIEW
           </h2>
+          <p className="text-gray-400 mt-3 text-sm sm:text-base max-w-md mx-auto text-pretty">
+            Step into the frozen colosseum. Trade blows, unleash frost skills,
+            and outlast your rival.
+          </p>
           <div className="w-20 h-1 bg-yellow-500 mx-auto mt-6 rounded-full" />
         </div>
 
         {/* Battle frame */}
-        <div className="relative mx-auto max-w-5xl border border-yellow-500/40 rounded-2xl p-4 sm:p-6 bg-black/80 backdrop-blur-sm shadow-2xl shadow-yellow-500/10">
+        <div
+          ref={frame.ref}
+          className={`reveal ${frame.visible ? "is-visible" : ""} relative mx-auto max-w-5xl border border-yellow-500/40 rounded-2xl p-4 sm:p-6 bg-black/80 backdrop-blur-sm shadow-2xl shadow-yellow-500/10`}
+        >
+          {/* Decorative corner brackets */}
+          <span className="pointer-events-none absolute -top-px -left-px w-6 h-6 border-t-2 border-l-2 border-yellow-500/70 rounded-tl-2xl" />
+          <span className="pointer-events-none absolute -top-px -right-px w-6 h-6 border-t-2 border-r-2 border-yellow-500/70 rounded-tr-2xl" />
+          <span className="pointer-events-none absolute -bottom-px -left-px w-6 h-6 border-b-2 border-l-2 border-yellow-500/70 rounded-bl-2xl" />
+          <span className="pointer-events-none absolute -bottom-px -right-px w-6 h-6 border-b-2 border-r-2 border-yellow-500/70 rounded-br-2xl" />
           {/* HP BARS */}
           <div className="flex justify-between items-start mb-6 gap-4">
             {/* Player */}
-            <div className="flex-1 text-left">
+            <div className="flex-1 min-w-0 text-left">
               <div className="flex items-center gap-2 mb-2">
                 <Heart className="w-4 h-4 text-emerald-500" />
                 <p className="font-bold tracking-wide text-sm sm:text-base">
@@ -256,7 +298,7 @@ const GamePreview = () => {
             </div>
 
             {/* Enemy */}
-            <div className="flex-1 text-right">
+            <div className="flex-1 min-w-0 text-right">
               <div className="flex items-center gap-2 mb-2 justify-end">
                 <span className="text-xs text-gray-500 mr-auto">{enemy.hp}/{enemy.maxHp}</span>
                 <p className="font-bold tracking-wide text-sm sm:text-base">
@@ -274,8 +316,32 @@ const GamePreview = () => {
           </div>
 
           {/* ARENA */}
-          <div className="relative h-80 sm:h-96 bg-[url('/arena.jpg')] bg-cover bg-center rounded-xl border border-zinc-700 overflow-hidden">
-            <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/30" />
+          <div className="relative h-80 sm:h-96 rounded-xl border border-zinc-700 overflow-hidden">
+            {/* Ken-burns background */}
+            <img
+              src="/arena.jpg"
+              alt=""
+              aria-hidden="true"
+              className="absolute inset-0 w-full h-full object-cover animate-slow-zoom"
+            />
+            <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/40" />
+            {/* Vignette */}
+            <div className="absolute inset-0 shadow-[inset_0_0_120px_30px_rgba(0,0,0,0.7)] pointer-events-none" />
+
+            {/* In-arena snow */}
+            <div className="absolute inset-0 pointer-events-none overflow-hidden">
+              {[...Array(10)].map((_, i) => (
+                <div
+                  key={i}
+                  className="absolute w-1 h-1 bg-white/50 rounded-full animate-snowfall"
+                  style={{
+                    left: `${(i * 11 + 5) % 100}%`,
+                    animationDelay: `${i * 0.7}s`,
+                    animationDuration: `${6 + (i % 3) * 2}s`,
+                  }}
+                />
+              ))}
+            </div>
 
             {/* Player fighter */}
             <div
@@ -379,7 +445,7 @@ const GamePreview = () => {
           </div>
 
           {/* ACTIONS */}
-          <div className="flex justify-center gap-3 sm:gap-4 mt-6">
+          <div className="flex flex-wrap justify-center gap-3 sm:gap-4 mt-6">
             <button
               onClick={() => playerAction("attack")}
               disabled={turn !== "player" || gameOver !== null}
